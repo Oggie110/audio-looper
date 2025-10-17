@@ -113,7 +113,7 @@ export default function LoopControls({
 
         <div>
           <label htmlFor="crossfade" className="block text-sm font-medium mb-2">
-            Crossfade Duration: {(crossfadeDuration * 1000).toFixed(0)}ms
+            Base Crossfade Duration: {(crossfadeDuration * 1000).toFixed(0)}ms
           </label>
           <input
             id="crossfade"
@@ -153,6 +153,10 @@ export default function LoopControls({
                 <div className="col-span-2">
                   <span className="text-gray-400">Duration:</span>{' '}
                   {(optimizedPoints.end - optimizedPoints.start).toFixed(3)}s
+                </div>
+                <div className="col-span-2">
+                  <span className="text-gray-400">Adaptive Crossfade:</span>{' '}
+                  {(optimizedPoints.crossfadeDuration * 1000).toFixed(0)}ms
                 </div>
                 <div className="col-span-2 text-xs text-gray-500">
                   Adjusted by {Math.abs(optimizedPoints.start - loopPoints.start).toFixed(3)}s (start) and{' '}

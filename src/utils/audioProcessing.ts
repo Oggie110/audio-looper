@@ -1,5 +1,25 @@
 import { LoopPoints, OptimizedLoopPoints } from '../types/audio.types'
 
+const EPSILON = 1e-6
+
+const clamp = (value: number, min: number, max: number) =>
+  Math.max(min, Math.min(max, value))
+
+const averageAbsoluteDerivative = (
+  audioData: Float32Array,
+  startSample: number,
+  windowSize: number
+): number => {
+  const end = Math.min(startSample + windowSize, audioData.length - 1)
+  let sum = 0
+
+  for (let i = startSample; i < end; i++) {
+    sum += Math.abs(audioData[i + 1] - audioData[i])
+  }
+
+  return sum / Math.max(1, end - startSample)
+}
+
 /**
  * Find the nearest zero-crossing point in the audio data
  * @param audioData Float32Array of audio samples
@@ -13,10 +33,25 @@ export function findNearestZeroCrossing(
   searchRadius: number = 2000
 ): number {
   let bestSample = targetSample
-  let minDistance = Infinity
+  let bestScore = Infinity
 
   const start = Math.max(0, targetSample - searchRadius)
   const end = Math.min(audioData.length - 1, targetSample + searchRadius)
+
+  const referenceWindow = Math.min(1024, Math.floor(searchRadius / 2))
+  const referenceWindowStart = clamp(
+    targetSample - Math.floor(referenceWindow / 2),
+    0,
+    audioData.length - referenceWindow
+  )
+  const referenceRMS = calculateRMS(
+    audioData,
+    referenceWindowStart,
+    referenceWindow
+  )
+  const referenceSlope =
+    audioData[Math.min(targetSample + 1, audioData.length - 1)] -
+    audioData[Math.max(targetSample - 1, 0)]
 
   for (let i = start; i < end - 1; i++) {
     const current = audioData[i]
@@ -27,12 +62,25 @@ export function findNearestZeroCrossing(
       // Calculate how close this crossing is to zero
       const crossingValue = Math.abs(current) + Math.abs(next)
       const distanceFromTarget = Math.abs(i - targetSample)
+      const slope = next - current
+      const slopeDiff = Math.abs(slope - referenceSlope)
 
-      // Weighted score: favor closeness to zero and proximity to target
-      const score = crossingValue * 0.3 + (distanceFromTarget / searchRadius) * 0.7
+      const localRMS = calculateRMS(
+        audioData,
+        clamp(i - Math.floor(referenceWindow / 2), 0, audioData.length - referenceWindow),
+        referenceWindow
+      )
+      const rmsDiff = Math.abs(referenceRMS - localRMS) / (referenceRMS + EPSILON)
 
-      if (score < minDistance) {
-        minDistance = score
+      // Weighted score: favor low amplitude at the crossing, RMS similarity and proximity
+      const score =
+        crossingValue * 0.35 +
+        (distanceFromTarget / (searchRadius + EPSILON)) * 0.25 +
+        clamp(rmsDiff, 0, 2) * 0.25 +
+        slopeDiff * 0.15
+
+      if (score < bestScore) {
+        bestScore = score
         bestSample = i
       }
     }
@@ -156,6 +204,63 @@ export function findPhaseMatchedPoint(
 }
 
 /**
+ * Determine an adaptive crossfade duration based on loop content
+ */
+export function getAdaptiveCrossfadeDuration(
+  audioData: Float32Array,
+  startSample: number,
+  endSample: number,
+  sampleRate: number,
+  requestedDuration: number
+): number {
+  const loopSamples = Math.max(1, endSample - startSample)
+  const loopDuration = loopSamples / sampleRate
+
+  const analysisWindow = Math.min(4096, Math.floor(loopSamples / 2))
+  const startRMS = calculateRMS(audioData, startSample, analysisWindow)
+  const endRMS = calculateRMS(
+    audioData,
+    Math.max(startSample, endSample - analysisWindow),
+    analysisWindow
+  )
+
+  const derivativeWindow = Math.min(2048, analysisWindow)
+  const startDerivative = averageAbsoluteDerivative(
+    audioData,
+    startSample,
+    derivativeWindow
+  )
+  const endDerivative = averageAbsoluteDerivative(
+    audioData,
+    Math.max(startSample, endSample - derivativeWindow - 1),
+    derivativeWindow
+  )
+
+  const rmsDiff = Math.abs(startRMS - endRMS) / (Math.max(startRMS, EPSILON))
+  const dynamicScore = clamp(
+    Math.max(startDerivative, endDerivative) / 0.5,
+    0,
+    1
+  )
+
+  const energyScore = clamp(rmsDiff, 0, 1)
+
+  const baseDuration = clamp(requestedDuration, 0.015, 0.2)
+  let adaptiveDuration =
+    baseDuration + energyScore * 0.03 + dynamicScore * 0.04
+
+  // Penalize for very short loops
+  if (loopDuration < 0.4) {
+    adaptiveDuration *= clamp(loopDuration / 0.4, 0.3, 1)
+  }
+
+  const minDuration = Math.min(0.015, loopDuration * 0.2)
+  const maxDuration = Math.min(0.15, loopDuration * 0.45)
+
+  return clamp(adaptiveDuration, Math.max(0.01, minDuration), Math.max(minDuration, maxDuration))
+}
+
+/**
  * Main optimization function that combines all techniques
  */
 export function optimizeLoopPoints(
@@ -188,6 +293,14 @@ export function optimizeLoopPoints(
   endSample = findPhaseMatchedPoint(audioData, startSample, endSample, 2000)
   endSample = findNearestZeroCrossing(audioData, endSample, 200)
 
+  const crossfadeDurationSeconds = getAdaptiveCrossfadeDuration(
+    audioData,
+    startSample,
+    endSample,
+    sampleRate,
+    crossfadeDuration
+  )
+
   // Convert back to time
   const optimizedStart = startSample / sampleRate
   const optimizedEnd = endSample / sampleRate
@@ -206,6 +319,6 @@ export function optimizeLoopPoints(
     end: optimizedEnd,
     startSample,
     endSample,
-    crossfadeDuration
+    crossfadeDuration: crossfadeDurationSeconds
   }
 }

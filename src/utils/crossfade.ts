@@ -1,5 +1,21 @@
 import { OptimizedLoopPoints } from '../types/audio.types'
 
+const getFadeInGain = (progress: number, useHann: boolean) => {
+  if (useHann) {
+    return Math.sqrt(0.5 - 0.5 * Math.cos(Math.PI * progress))
+  }
+
+  return Math.sin((progress * Math.PI) / 2)
+}
+
+const getFadeOutGain = (progress: number, useHann: boolean) => {
+  if (useHann) {
+    return Math.sqrt(0.5 + 0.5 * Math.cos(Math.PI * progress))
+  }
+
+  return Math.cos((progress * Math.PI) / 2)
+}
+
 /**
  * Apply an equal-power crossfade to create a seamless loop segment
  * @param audioBuffer Original audio buffer
@@ -13,11 +29,13 @@ export function applyCrossfade(
   const sampleRate = audioBuffer.sampleRate
   const numberOfChannels = audioBuffer.numberOfChannels
   const fadeLength = Math.floor(loopPoints.crossfadeDuration * sampleRate)
+  const useHannFade = loopPoints.crossfadeDuration >= 0.075
 
   // Calculate the length of the output buffer
   const startSample = loopPoints.startSample
   const endSample = loopPoints.endSample
   const loopLength = endSample - startSample
+  const stitchLength = Math.min(fadeLength, Math.floor(loopLength * 0.2))
 
   // Create new audio buffer
   const audioContext = new AudioContext()
@@ -37,10 +55,21 @@ export function applyCrossfade(
       outputData[i] = inputData[startSample + i]
     }
 
+    // Blend-in a short slice from the loop tail so the start already
+    // contains upcoming waveform information
+    for (let i = 0; i < stitchLength; i++) {
+      const mixProgress = i / Math.max(1, stitchLength - 1)
+      const blendAmount = 0.35 * (1 - mixProgress)
+      const tailIndex = Math.max(startSample, endSample - stitchLength + i)
+      outputData[i] =
+        outputData[i] * (1 - blendAmount) + inputData[tailIndex] * blendAmount
+    }
+
     // Apply crossfade at the beginning (fade in from end of loop)
     for (let i = 0; i < fadeLength; i++) {
-      const fadeInGain = Math.sqrt(i / fadeLength) // Equal-power fade in
-      const fadeOutGain = Math.sqrt(1 - (i / fadeLength)) // Equal-power fade out
+      const progress = i / Math.max(1, fadeLength - 1)
+      const fadeInGain = getFadeInGain(progress, useHannFade)
+      const fadeOutGain = getFadeOutGain(progress, useHannFade)
 
       // Get the sample from the end of the loop
       const endLoopSample = inputData[endSample - fadeLength + i]
@@ -52,14 +81,25 @@ export function applyCrossfade(
 
     // Apply crossfade at the end (fade out to beginning of loop)
     for (let i = 0; i < fadeLength; i++) {
-      const fadeOutGain = Math.sqrt(1 - (i / fadeLength)) // Equal-power fade out
-      const fadeInGain = Math.sqrt(i / fadeLength) // Equal-power fade in
+      const progress = i / Math.max(1, fadeLength - 1)
+      const fadeOutGain = getFadeOutGain(progress, useHannFade)
+      const fadeInGain = getFadeInGain(progress, useHannFade)
 
       const currentSample = outputData[loopLength - fadeLength + i]
       const startLoopSample = inputData[startSample + i]
 
       outputData[loopLength - fadeLength + i] =
         fadeOutGain * currentSample + fadeInGain * startLoopSample
+    }
+
+    // Pre-blend the start material into the tail to soften the entry
+    for (let i = 0; i < stitchLength; i++) {
+      const mixProgress = i / Math.max(1, stitchLength - 1)
+      const blendAmount = 0.35 * mixProgress
+      const targetIndex = loopLength - stitchLength + i
+      outputData[targetIndex] =
+        outputData[targetIndex] * (1 - blendAmount) +
+        inputData[startSample + i] * blendAmount
     }
   }
 
