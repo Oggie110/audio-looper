@@ -269,7 +269,8 @@ export function optimizeLoopPoints(
   crossfadeDuration: number = 0.05 // 50ms default
 ): OptimizedLoopPoints {
   const sampleRate = audioBuffer.sampleRate
-  const audioData = audioBuffer.getChannelData(0) // Use first channel
+  const analysisSource = audioBuffer.getChannelData(0) // Use first channel
+  const audioData = removeDCOffset(analysisSource)
 
   // Convert time to samples
   let startSample = Math.floor(loopPoints.start * sampleRate)
