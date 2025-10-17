@@ -5,28 +5,6 @@ const EPSILON = 1e-6
 const clamp = (value: number, min: number, max: number) =>
   Math.max(min, Math.min(max, value))
 
-const removeDCOffset = (audioData: Float32Array): Float32Array => {
-  let sum = 0
-
-  for (let i = 0; i < audioData.length; i++) {
-    sum += audioData[i]
-  }
-
-  const mean = sum / Math.max(1, audioData.length)
-
-  if (Math.abs(mean) < EPSILON) {
-    return audioData.slice()
-  }
-
-  const corrected = new Float32Array(audioData.length)
-
-  for (let i = 0; i < audioData.length; i++) {
-    corrected[i] = audioData[i] - mean
-  }
-
-  return corrected
-}
-
 const averageAbsoluteDerivative = (
   audioData: Float32Array,
   startSample: number,
